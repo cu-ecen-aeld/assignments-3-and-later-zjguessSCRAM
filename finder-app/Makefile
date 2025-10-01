@@ -7,6 +7,6 @@ else
 	gcc -c -o writer writer.c
 	gcc -o writer writer.c
 endif
-	file writer > ../assignments/assignment2/cross-compile.txt
+	file writer > ../assignments/assignment2/fileresults.txt
 clean:
-	rm -f writer writer.o ../assignments/assignment2/cross-compile.txt
+	rm -f writer writer.o ../assignments/assignment2/fileresults.txt
