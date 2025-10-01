@@ -9,6 +9,7 @@ jobs:
           - name: Checkout submodules
             run : git submodule update --init --recursive
           - name: Run unit test
+<<<<<<< HEAD
 
 
 
@@ -28,3 +29,6 @@ jobs:
 
 
             run: ./full-test.sh
+=======
+            run: ./unit-test.sh
+>>>>>>> assignments-base/assignment3-part-1
