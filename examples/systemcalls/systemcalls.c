@@ -123,7 +123,7 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
 */
     int status;
     pid_t pid = fork();
-    int fd = open(ouputfile, O_WRONLY|O_TRUNC|O_CREAT, 0644);
+    int fd = open(outputfile, O_WRONLY|O_TRUNC|O_CREAT, 0644);
     if (fd < 0) {
         perror("open");
         abort();
