@@ -80,13 +80,10 @@ bool do_exec(int count, ...)
       
       perror("execv failed");
       exit(-1);
-    }
-    if (waitpid (pid, &status, 0) == -1) {
-        return -1;
-        
-    } else if (WIFEXITED (status)){
-        return WEXITSTATUS (status);
-        
+    } else {
+      waitpid(pid, &status, 0);
+      va_end(args);
+      return (WIFEXITED(status) && (WEXITSTATUS(status) == 0));
     }  
     va_end(args);
 
@@ -129,6 +126,7 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
         abort();
     }
     if (pid == -1){
+        va_end(args);
         return -1;
     } else if (pid == 0) {
       if (dup2(fd, 1) < 0) {
@@ -141,13 +139,10 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
       
       perror("execv failed");
       exit(-1);
-    }
-    if (waitpid (pid, &status, 0) == -1) {
-        return -1;
-        
-    } else if (WIFEXITED (status)){
-        return WEXITSTATUS (status);
-        
+    } else {
+      waitpid(pid, &status, 0);
+      va_end(args);
+      return (WIFEXITED(status) && (WEXITSTATUS(status) == 0));
     }  
     va_end(args);
 
