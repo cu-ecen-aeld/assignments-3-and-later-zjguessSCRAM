@@ -35,10 +35,10 @@ bool start_thread_obtaining_mutex(pthread_t *thread, pthread_mutex_t *mutex,int 
     tdata->wait_to_obtain_ms = wait_to_obtain_ms;
     tdata->wait_to_release_ms = wait_to_release_ms;
     
-    if(pthread_create(thread, NULL, theadfunc, tdata) != 0){
+    if(pthread_create(thread, NULL, threadfunc, tdata) != 0){
       free(tdata);
       return false;
-    {
+    }
     
     return true;
 }
