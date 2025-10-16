@@ -1,5 +1,10 @@
-CC ?= $(CROSS_COMPILE)gcc
-CFLAGS = -Wall -Werror -g
+##############################################################
+# AESDSOCKET SERVER MAKEFILE
+##############################################################
+
+# Use the CC passed from Buildroot or fallback to default gcc
+CC ?= gcc
+CFLAGS ?= -Wall -Werror -g
 TARGET = aesdsocket
 
 all: $(TARGET)
