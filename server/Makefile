@@ -1,9 +1,4 @@
-##############################################################
-# AESDSOCKET SERVER MAKEFILE
-##############################################################
-
-# Use the CC passed from Buildroot or fallback to default gcc
-CC ?= gcc
+CC := $(CC)
 CFLAGS ?= -Wall -Werror -g
 TARGET = aesdsocket
 
