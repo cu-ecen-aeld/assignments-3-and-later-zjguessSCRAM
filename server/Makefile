@@ -1,12 +1,14 @@
-CC := $(CC)
-CFLAGS ?= -Wall -Werror -g
-TARGET = aesdsocket
+CC      = gcc
+RM      = rm -f
+LOG_FILE = /var/tmp/aesdsocketdata
 
-all: $(TARGET)
+default: all
 
-$(TARGET): aesdsocket.c
-	$(CC) $(CFLAGS) aesdsocket.c -o $(TARGET)
+all: aesdsocket
 
-clean:
-	rm -f $(TARGET)
+aesdsocket: aesdsocket.c
+	$(CROSS_COMPILE)$(CC) $(CFLAGS) -o aesdsocket aesdsocket.c
 
+clean veryclean:
+	$(RM) aesdsocket
+	$(RM) $(LOG_FILE)
