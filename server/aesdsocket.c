@@ -1,18 +1,3 @@
-/**
- * aesdsocket.c
- *
- * This program implements a TCP server that:
- * - Listens on port 9000 for incoming client connections.
- * - Accepts one client connection at a time.
- * - Receives newline-terminated data packets from clients and appends them
- *   to the file /var/tmp/aesdsocketdata.
- * - After receiving each complete packet, sends the full file contents
- *   back to the client.
- * - Logs client connections, disconnections, and errors to syslog.
- * - Supports daemon mode using the "-d" argument.
- * - Cleans up sockets and temporary files when SIGINT or SIGTERM is received.
- */
-
 #define _POSIX_C_SOURCE 200809L
 
 #include <stdio.h>
@@ -27,200 +12,145 @@
 #include <signal.h>
 #include <stdbool.h>
 #include <errno.h>
-#include <sys/stat.h> 
+#include <pthread.h>
+#include <time.h>
+#include <sys/stat.h>
 
 #define PORT 9000
 #define DATAFILE "/var/tmp/aesdsocketdata"
 
-// Global variables for signal handling and socket management
-volatile sig_atomic_t exit_requested = 0;  // Flag set by signal handler
-int global_sockfd = -1;                    // Listening socket descriptor
-int global_clientfd = -1;                  // Current connected client descriptor
+volatile sig_atomic_t exit_requested = 0;
+int global_sockfd = -1;
+pthread_mutex_t file_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-/**
- * signal_handler
- * ----------------
- * Triggered by SIGINT or SIGTERM.
- * Sets the exit flag and closes any open sockets.
- */
+typedef struct thread_node {
+    pthread_t tid;
+    struct thread_node *next;
+} thread_node_t;
+
+thread_node_t *thread_list_head = NULL;
+
 void signal_handler(int signo) {
     exit_requested = 1;
-
-    if (global_clientfd != -1) {
-        close(global_clientfd);
-        global_clientfd = -1;
-    }
-
-    if (global_sockfd != -1) {
-        close(global_sockfd);
-        global_sockfd = -1;
-    }
-
+    if (global_sockfd != -1) close(global_sockfd);
     syslog(LOG_INFO, "Caught signal %d, exiting", signo);
 }
 
-/**
- * open_socket
- * -----------
- * Creates a TCP socket, binds it to PORT, and starts listening.
- *
- * Returns:
- *   Socket descriptor on success, -1 on failure.
- */
-int open_socket(void) {
-    int sockfd = socket(AF_INET, SOCK_STREAM, 0); // TCP IPv4 socket
-    if (sockfd < 0) {
-        perror("socket");
-        return -1;
-    }
+// Add thread to linked list
+void add_thread(pthread_t tid) {
+    thread_node_t *node = malloc(sizeof(thread_node_t));
+    node->tid = tid;
+    node->next = thread_list_head;
+    thread_list_head = node;
+}
 
-    // Allow quick reuse of the port after program restart
+// Join all threads in linked list
+void join_all_threads(void) {
+    thread_node_t *curr = thread_list_head;
+    while (curr) {
+        pthread_join(curr->tid, NULL);
+        thread_node_t *tmp = curr;
+        curr = curr->next;
+        free(tmp);
+    }
+}
+
+// Timestamp thread
+void *timestamp_thread(void *arg) {
+    while (!exit_requested) {
+        sleep(10); // 10 seconds
+
+        time_t now = time(NULL);
+        struct tm tm_now;
+        localtime_r(&now, &tm_now);
+
+        char timestamp[128];
+        strftime(timestamp, sizeof(timestamp),
+                 "timestamp:%a, %d %b %Y %H:%M:%S %z\n",
+                 &tm_now);
+
+        pthread_mutex_lock(&file_mutex);
+        FILE *fp = fopen(DATAFILE, "a");
+        if (fp) {
+            fwrite(timestamp, 1, strlen(timestamp), fp);
+            fflush(fp);
+            fclose(fp);
+        }
+        pthread_mutex_unlock(&file_mutex);
+    }
+    return NULL;
+}
+
+int open_socket(void) {
+    int sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (sockfd < 0) return -1;
+
     int optval = 1;
     setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval));
 
-    struct sockaddr_in serv_addr;
-    memset(&serv_addr, 0, sizeof(serv_addr));
-    serv_addr.sin_family = AF_INET;          // IPv4
-    serv_addr.sin_addr.s_addr = INADDR_ANY;  // Bind to all interfaces
-    serv_addr.sin_port = htons(PORT);        // Port 9000
+    struct sockaddr_in serv_addr = {0};
+    serv_addr.sin_family = AF_INET;
+    serv_addr.sin_addr.s_addr = INADDR_ANY;
+    serv_addr.sin_port = htons(PORT);
 
     if (bind(sockfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
-        perror("bind");
         close(sockfd);
         return -1;
     }
 
     if (listen(sockfd, 10) < 0) {
-        perror("listen");
         close(sockfd);
         return -1;
     }
-
     return sockfd;
 }
 
-/**
- * daemonize
- * ---------
- * Converts the current process into a daemon:
- * - Forks twice to detach from the controlling terminal.
- * - Creates a new session.
- * - Redirects stdin, stdout, stderr to /dev/null.
- */
-void daemonize(void) {
-    pid_t pid = fork();
-    if (pid < 0) exit(EXIT_FAILURE);
-    if (pid > 0) exit(EXIT_SUCCESS); // Parent exits
+// Client thread function
+void *client_thread(void *arg) {
+    int clientfd = *((int *)arg);
+    free(arg);
 
-    if (setsid() < 0) exit(EXIT_FAILURE);
-
-    pid = fork();
-    if (pid < 0) exit(EXIT_FAILURE);
-    if (pid > 0) exit(EXIT_SUCCESS); // Parent exits
-
-    umask(0);
-    chdir("/");
-
-    // Redirect standard file descriptors
-    freopen("/dev/null", "r", stdin);
-    freopen("/dev/null", "w", stdout);
-    freopen("/dev/null", "w", stderr);
-}
-
-/**
- * handle_client
- * -------------
- * Receives data from a connected client, processes newline-terminated packets,
- * appends them to the data file, and sends the full file contents back to the client.
- */
-void handle_client(int clientfd, struct sockaddr_in *cli_addr) {
-    char client_ip[INET_ADDRSTRLEN];
-    inet_ntop(AF_INET, &cli_addr->sin_addr, client_ip, sizeof(client_ip));
-    syslog(LOG_INFO, "Accepted connection from %s", client_ip);
-
-    // Open the data file in append mode
-    FILE *fp = fopen(DATAFILE, "a");
-    if (!fp) {
-        syslog(LOG_ERR, "Failed to open %s", DATAFILE);
-        close(clientfd);
-        return;
-    }
-
+    char temp[512];
     size_t bufsize = 1024;
-    char *recvbuf = malloc(bufsize); // Buffer to accumulate packet data
-    if (!recvbuf) {
-        syslog(LOG_ERR, "malloc failed");
-        fclose(fp);
-        close(clientfd);
-        return;
-    }
+    char *recvbuf = malloc(bufsize);
+    size_t datalen = 0;
 
-    size_t datalen = 0;   // Number of bytes currently in recvbuf
-    char temp[512];       // Temporary buffer for recv()
-    ssize_t n;
+    while (!exit_requested) {
+        ssize_t n = recv(clientfd, temp, sizeof(temp), 0);
+        if (n <= 0) break;
 
-    while (!exit_requested && (n = recv(clientfd, temp, sizeof(temp), 0)) > 0) {
         size_t temp_offset = 0;
-
         while (temp_offset < n) {
-            // Resize recvbuf if needed
             if (datalen + (n - temp_offset) >= bufsize) {
-                size_t newsize = bufsize * 2;
-                while (datalen + (n - temp_offset) >= newsize)
-                    newsize *= 2;
-                char *newbuf = realloc(recvbuf, newsize);
-                if (!newbuf) {
-                    syslog(LOG_ERR, "realloc failed");
-                    free(recvbuf);
-                    fclose(fp);
-                    close(clientfd);
-                    return;
-                }
+                bufsize *= 2;
+                char *newbuf = realloc(recvbuf, bufsize);
+                if (!newbuf) goto cleanup;
                 recvbuf = newbuf;
-                bufsize = newsize;
             }
 
-            // Copy data from temp to recvbuf
             size_t copylen = n - temp_offset;
             memcpy(recvbuf + datalen, temp + temp_offset, copylen);
             datalen += copylen;
             temp_offset += copylen;
 
-            // Process complete packets in recvbuf
             size_t start = 0;
-            for (size_t i = 0; i < datalen; ++i) {
+            for (size_t i = 0; i < datalen; i++) {
                 if (recvbuf[i] == '\n') {
                     size_t pktlen = i - start + 1;
 
-                    // Append packet to data file
-                    fwrite(recvbuf + start, 1, pktlen, fp);
-                    fflush(fp);
-
-                    // Send the full file contents back to the client
-                    FILE *fp2 = fopen(DATAFILE, "r");
-                    if (!fp2) {
-                        syslog(LOG_ERR, "Failed to open %s for reading", DATAFILE);
-                        free(recvbuf);
+                    pthread_mutex_lock(&file_mutex);
+                    FILE *fp = fopen(DATAFILE, "a");
+                    if (fp) {
+                        fwrite(recvbuf + start, 1, pktlen, fp);
+                        fflush(fp);
                         fclose(fp);
-                        close(clientfd);
-                        return;
                     }
+                    pthread_mutex_unlock(&file_mutex);
 
-                    char sendbuf[1024];
-                    ssize_t nn;
-                    while ((nn = fread(sendbuf, 1, sizeof(sendbuf), fp2)) > 0) {
-                        if (send(clientfd, sendbuf, nn, 0) < 0) {
-                            syslog(LOG_ERR, "Failed to send data to client");
-                            break;
-                        }
-                    }
-                    fclose(fp2);
-
-                    start = i + 1; // Move start past the processed packet
+                    start = i + 1;
                 }
             }
 
-            // Shift leftover data to the start of the buffer for next recv()
             if (start > 0 && start < datalen) {
                 memmove(recvbuf, recvbuf + start, datalen - start);
                 datalen -= start;
@@ -230,83 +160,67 @@ void handle_client(int clientfd, struct sockaddr_in *cli_addr) {
         }
     }
 
+cleanup:
     free(recvbuf);
-    fclose(fp);
     close(clientfd);
-    syslog(LOG_INFO, "Closed connection from %s", client_ip);
+    return NULL;
 }
 
-/**
- * listen_socket
- * -------------
- * Main server loop: accepts incoming connections and handles clients.
- */
-int listen_socket(int sockfd) {
+void listen_socket(int sockfd) {
     openlog("aesdsocket", LOG_PID | LOG_CONS, LOG_USER);
+
+    pthread_t ts_tid;
+    pthread_create(&ts_tid, NULL, timestamp_thread, NULL);
+    add_thread(ts_tid);
 
     while (!exit_requested) {
         struct sockaddr_in cli_addr;
         socklen_t clilen = sizeof(cli_addr);
 
-        int clientfd = accept(sockfd, (struct sockaddr *)&cli_addr, &clilen);
-        if (clientfd < 0) {
+        int *clientfd = malloc(sizeof(int));
+        *clientfd = accept(sockfd, (struct sockaddr *)&cli_addr, &clilen);
+        if (*clientfd < 0) {
+            free(clientfd);
             if (exit_requested) break;
-            perror("accept");
             continue;
         }
 
-        global_clientfd = clientfd;
-        handle_client(clientfd, &cli_addr);
-        global_clientfd = -1;
+        pthread_t tid;
+        pthread_create(&tid, NULL, client_thread, clientfd);
+        add_thread(tid);
     }
 
+    join_all_threads();
     closelog();
-    return 0;
 }
 
-/**
- * main
- * ----
- * Entry point: parses arguments, sets up signals, opens the socket,
- * optionally daemonizes, and starts listening for clients.
- */
 int main(int argc, char *argv[]) {
-    int daemon_mode = 0;
+    int daemon_mode = (argc == 2 && strcmp(argv[1], "-d") == 0);
 
-    // Parse -d argument for daemon mode
-    if (argc == 2 && strcmp(argv[1], "-d") == 0) {
-        daemon_mode = 1;
-    }
-
-    // Register signal handlers for SIGINT/SIGTERM
-    struct sigaction sa;
-    memset(&sa, 0, sizeof(sa));
+    struct sigaction sa = {0};
     sa.sa_handler = signal_handler;
     sigaction(SIGINT, &sa, NULL);
     sigaction(SIGTERM, &sa, NULL);
 
-    // Open listening socket
     int sockfd = open_socket();
-    if (sockfd < 0) {
-        fprintf(stderr, "Failed to open socket\n");
-        return 1;
-    }
+    if (sockfd < 0) return 1;
     global_sockfd = sockfd;
 
-    // Run as daemon if requested
     if (daemon_mode) {
-        daemonize();
-    } else {
-        printf("Socket opened successfully on port %d\n", PORT);
+        if (fork() > 0) exit(EXIT_SUCCESS);
+        setsid();
+        if (fork() > 0) exit(EXIT_SUCCESS);
+        chdir("/");
+        umask(0);
+        freopen("/dev/null", "r", stdin);
+        freopen("/dev/null", "w", stdout);
+        freopen("/dev/null", "w", stderr);
     }
 
-    // Start accepting and handling clients
     listen_socket(sockfd);
 
-    // Cleanup on exit
     if (global_sockfd != -1) close(global_sockfd);
     remove(DATAFILE);
-
     return 0;
 }
 

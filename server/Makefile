@@ -1,15 +1,25 @@
-CC ?= $(CROSS_COMPILE)gcc
-RM = rm -f
-LOG_FILE = /var/tmp/aesdsocketdata
+CC = $(CROSS_COMPILE)gcc
+CFLAGS = -Wall -Werror -g
+TARGET ?= aesdsocket
+LDFLAGS ?= -lpthread -lrt 
+SRC = aesdsocket.c
+OBJ = $(SRC:.c=.o)
 
-default: all
 
-all: aesdsocket
+all: $(TARGET)
 
-aesdsocket: aesdsocket.c
-	$(CC) $(CFLAGS) -o aesdsocket aesdsocket.c
 
-clean veryclean:
-	$(RM) aesdsocket
-	$(RM) $(LOG_FILE)
+$(TARGET): $(OBJ)
+		$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS)
 
+%.o: %.c 
+		$(CC) $(CFLAGS) -c $< -o $@
+
+clean:
+		rm -f $(TARGET) $(OBJ)
+
+install:
+		@echo "No install target defined"
+
+
+.PHONY: all clean install
