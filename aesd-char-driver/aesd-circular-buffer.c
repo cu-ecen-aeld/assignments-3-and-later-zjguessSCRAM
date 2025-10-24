@@ -77,12 +77,8 @@ void aesd_circular_buffer_add_entry(struct aesd_circular_buffer *buffer,
     if (!buffer || !add_entry)
         return;
 
+    // Overwrite oldest if full
     if (buffer->full) {
-#ifdef __KERNEL__
-        kfree(buffer->entry[buffer->out_offs].buffptr);
-#else
-        free((void *)buffer->entry[buffer->out_offs].buffptr);
-#endif
         buffer->out_offs = (buffer->out_offs + 1) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
     }
 
