@@ -14,6 +14,9 @@
 #include <string.h>
 #endif
 
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/syslog.h>
 #include "aesd-circular-buffer.h"
 
 /**
